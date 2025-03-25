@@ -1,115 +1,225 @@
 const Inventario = require('../models/Inventario');
-const Producto = require('../models/Producto');
 const mongoose = require('mongoose');
 
-// Obtener el inventario y agregar los detalles de los productos
+// Get all inventory items with enhanced error handling
 exports.getInventario = async (req, res) => {
     try {
-        const inventario = await Inventario.find();
-
-        if (inventario.length === 0) {
-            return res.status(404).json({ message: "No se encontraron productos en el inventario" });
+        const inventario = await Inventario.find().lean();
+        
+        if (!inventario || inventario.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: "No se encontraron productos en el inventario" 
+            });
         }
 
-        const inventarioConProductos = await Promise.all(inventario.map(async (item) => {
-            const producto = await Producto.findOne({ nombreProducto: item.nombreProducto });
-            if (producto) {
-                item.nombreProducto = producto.nombreProducto;
-                item.stockExhibe = producto.stockExhibe;
-            }
-            return item;
+        // Format dates for display
+        const inventarioFormateado = inventario.map(item => ({
+            ...item,
+            fechaCaducidadLote: item.fechaCaducidadLote ? item.fechaCaducidadLote.toISOString().split('T')[0] : ''
         }));
 
-        res.json(inventarioConProductos);
+        res.status(200).json({
+            success: true,
+            data: inventarioFormateado
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Error al obtener inventario", error });
+        console.error('Error en getInventario:', error);
+        res.status(500).json({ 
+            success: false,
+            message: "Error al obtener el inventario",
+            error: error.message 
+        });
     }
 };
 
-// Crear un nuevo producto en el inventario
+// Create new inventory item with validation
 exports.createInventario = async (req, res) => {
     try {
-        const inventario = new Inventario(req.body);
-        await inventario.save();
-        res.json({ message: "Inventario agregado", inventario });
+        // Validate required fields
+        const requiredFields = [
+            'loteCaja', 'nombreProducto', 'nombreProveedor',
+            'cantidadCajasLote', 'stockExhibe', 'stockExhibeMin',
+            'stockAlmacen', 'stockAlmacenMin', 'fechaCaducidadLote'
+        ];
+        
+        const missingFields = requiredFields.filter(field => !req.body[field]);
+        
+        if (missingFields.length > 0) {
+            return res.status(400).json({ 
+                success: false,
+                message: `Faltan campos requeridos: ${missingFields.join(', ')}` 
+            });
+        }
+
+        // Validate date format
+        const fechaCaducidad = new Date(req.body.fechaCaducidadLote);
+        if (isNaN(fechaCaducidad.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: "Formato de fecha no válido"
+            });
+        }
+
+        // Create new inventory item
+        const nuevoInventario = new Inventario({
+            ...req.body,
+            fechaCaducidadLote: fechaCaducidad
+        });
+
+        const inventarioGuardado = await nuevoInventario.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Inventario creado exitosamente",
+            data: inventarioGuardado
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Error al agregar inventario", error });
+        console.error('Error en createInventario:', error);
+        res.status(500).json({
+            success: false,
+            message: "Error al crear el inventario",
+            error: error.message
+        });
     }
 };
 
-exports.updateStockExhibe = async (req, res) => {
-    const { id } = req.params;
-    const { stockExhibe } = req.body;
-  
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: 'ID no válido' });
-    }
-  
-    try {
-      const inventario = await Inventario.findById(id);
-      if (!inventario) {
-        return res.status(404).json({ message: 'Producto no encontrado en el inventario' });
-      }
-  
-      inventario.stockExhibe = stockExhibe;
-      await inventario.save();
-  
-      res.json({ message: 'Stock Exhibición actualizado', inventario });
-    } catch (error) {
-      console.error('Error al actualizar stockExhibe:', error);
-      res.status(500).json({ message: 'Error al actualizar stockExhibe', error });
-    }
-  };
-  
-  
-
-// Actualizar inventario completo
+// Update inventory item
 exports.actualizarInventario = async (req, res) => {
-    const { id } = req.params;
-    const datosActualizados = req.body;
-  
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: 'ID no válido' });
-    }
-  
     try {
-      const inventario = await Inventario.findById(id);
-      if (!inventario) {
-        return res.status(404).json({ message: 'Inventario no encontrado' });
-      }
-  
-      Object.assign(inventario, datosActualizados); // Actualizar los datos del inventario
-      await inventario.save();
-  
-      res.json({ message: 'Inventario actualizado', inventario });
+        const { id } = req.params;
+        
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "ID de inventario no válido"
+            });
+        }
+
+        // Check if inventory exists
+        const inventarioExistente = await Inventario.findById(id);
+        if (!inventarioExistente) {
+            return res.status(404).json({
+                success: false,
+                message: "Inventario no encontrado"
+            });
+        }
+
+        // Prepare update data
+        const updateData = { ...req.body };
+        
+        // Handle date conversion if present
+        if (req.body.fechaCaducidadLote) {
+            updateData.fechaCaducidadLote = new Date(req.body.fechaCaducidadLote);
+            if (isNaN(updateData.fechaCaducidadLote.getTime())) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Formato de fecha no válido"
+                });
+            }
+        }
+
+        const inventarioActualizado = await Inventario.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "Inventario actualizado exitosamente",
+            data: inventarioActualizado
+        });
     } catch (error) {
-      console.error('Error al actualizar inventario:', error);
-      res.status(500).json({ message: 'Error al actualizar inventario', error });
+        console.error('Error en actualizarInventario:', error);
+        res.status(500).json({
+            success: false,
+            message: "Error al actualizar el inventario",
+            error: error.message
+        });
     }
-  };
+};
 
-
+// Delete inventory item
 exports.eliminarInventario = async (req, res) => {
-    const { id } = req.params;
-  
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: 'ID no válido' });
-    }
-  
     try {
-      const inventario = await Inventario.findByIdAndDelete(id);
-      if (!inventario) {
-        return res.status(404).json({ message: 'Inventario no encontrado' });
-      }
-  
-      res.json({ message: 'Inventario eliminado', inventario });
+        const { id } = req.params;
+        
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "ID de inventario no válido"
+            });
+        }
+
+        const inventarioEliminado = await Inventario.findByIdAndDelete(id);
+        
+        if (!inventarioEliminado) {
+            return res.status(404).json({
+                success: false,
+                message: "Inventario no encontrado"
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Inventario eliminado exitosamente",
+            data: inventarioEliminado
+        });
     } catch (error) {
-      console.error('Error al eliminar inventario:', error);
-      res.status(500).json({ message: 'Error al eliminar inventario', error });
+        console.error('Error en eliminarInventario:', error);
+        res.status(500).json({
+            success: false,
+            message: "Error al eliminar el inventario",
+            error: error.message
+        });
     }
-  };
-  
-  
-  
+};
+
+// Update stock
+exports.updateStockExhibe = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { stockExhibe } = req.body;
+        
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "ID de inventario no válido"
+            });
+        }
+
+        if (typeof stockExhibe !== 'number' || stockExhibe < 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Valor de stock no válido"
+            });
+        }
+
+        const inventarioActualizado = await Inventario.findByIdAndUpdate(
+            id,
+            { stockExhibe },
+            { new: true }
+        );
+
+        if (!inventarioActualizado) {
+            return res.status(404).json({
+                success: false,
+                message: "Inventario no encontrado"
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Stock actualizado exitosamente",
+            data: inventarioActualizado
+        });
+    } catch (error) {
+        console.error('Error en updateStockExhibe:', error);
+        res.status(500).json({
+            success: false,
+            message: "Error al actualizar el stock",
+            error: error.message
+        });
+    }
+};

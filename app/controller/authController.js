@@ -94,16 +94,92 @@ exports.getUsers = async (req, res) => {
     const { id } = req.params;
   
     try {
-      const user = await User.findByIdAndDelete(id);
-      if (!user) {
-        console.log("⚠️ Usuario no encontrado.");
-        return res.status(404).json({ message: 'Usuario no encontrado' });
-      }
+        const user = await User.findByIdAndDelete(id);
+        if (!user) {
+            console.log("⚠️ Usuario no encontrado.");
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Usuario no encontrado' 
+            });
+        }
   
-      console.log("✅ Usuario eliminado:", user.email);
-      res.status(200).json({ message: 'Usuario eliminado con éxito' });
+        console.log("✅ Usuario eliminado:", user.email);
+        res.status(200).json({ 
+            success: true, 
+            message: 'Usuario eliminado con éxito',
+            data: { id: user._id }
+        });
     } catch (error) {
-      console.error("🚨 Error al eliminar usuario:", error);
-      res.status(500).json({ message: 'Error al eliminar usuario' });
+        console.error("🚨 Error al eliminar usuario:", error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error al eliminar usuario',
+            error: error.message 
+        });
     }
-  };
+};
+
+  // authController.js - Método updateUser
+exports.updateUser = async (req, res) => {
+  const { id } = req.params;
+  const { email, password, role } = req.body;
+
+  try {
+      // Verificar si el usuario existe
+      const user = await User.findById(id);
+      if (!user) {
+          return res.status(404).json({ 
+              success: false, 
+              message: 'Usuario no encontrado' 
+          });
+      }
+
+      // Preparar datos a actualizar
+      const updateData = { email, role };
+
+      // Si se proporcionó una nueva contraseña, hashearla
+      if (password && password.length >= 6) {
+          const salt = await bcrypt.genSalt(10);
+          const hashedPassword = await bcrypt.hash(password, salt);
+          updateData.password = hashedPassword;
+      }
+
+      // Actualizar el usuario
+      const updatedUser = await User.findByIdAndUpdate(
+          id,
+          updateData,
+          { new: true, runValidators: true }
+      ).select('-password'); // Excluir la contraseña de la respuesta
+
+      res.status(200).json({ 
+          success: true, 
+          message: 'Usuario actualizado con éxito',
+          data: updatedUser
+      });
+
+  } catch (error) {
+      console.error("Error al actualizar usuario:", error);
+      
+      // Manejar errores de validación
+      if (error.name === 'ValidationError') {
+          return res.status(400).json({ 
+              success: false, 
+              message: 'Error de validación',
+              errors: Object.values(error.errors).map(e => e.message) 
+          });
+      }
+      
+      // Manejar error de correo duplicado
+      if (error.code === 11000) {
+          return res.status(400).json({ 
+              success: false, 
+              message: 'El correo electrónico ya está en uso' 
+          });
+      }
+
+      res.status(500).json({ 
+          success: false, 
+          message: 'Error en el servidor al actualizar usuario' 
+      });
+  }
+};
